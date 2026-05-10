@@ -1,0 +1,25 @@
+name: Notify Webhook on Push
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+
+      - name: Get diff
+        id: diff
+        run: echo "DIFF=$(git diff HEAD~1 HEAD --stat)" >> $GITHUB_OUTPUT
+
+      - name: Send to webhook
+        run: |
+          curl -X POST https://accipitrine-elena-nonhallucinated.ngrok-free.dev/webhook \
+            -H "Content-Type: application/json" \
+            -d "{\"branch\": \"${{ github.ref_name }}\", \"commit\": \"${{ github.sha }}\", \"diff\": \"${{ steps.diff.outputs.DIFF }}\"}"
