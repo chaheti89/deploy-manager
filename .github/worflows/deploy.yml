@@ -16,7 +16,11 @@ jobs:
 
       - name: Get diff
         id: diff
-        run: echo "DIFF=$(git diff HEAD~1 HEAD --stat)" >> $GITHUB_OUTPUT
+        run: |
+          DIFF=$(git diff HEAD~1 HEAD --stat)
+          echo "DIFF<<EOF" >> $GITHUB_OUTPUT
+          echo "$DIFF" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Send to webhook
         run: |
