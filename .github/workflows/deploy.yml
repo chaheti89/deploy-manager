@@ -1,13 +1,17 @@
-name: Notify Webhook on Push
+﻿name: Notify Webhook on Push
+
 on:
   push:
     branches:
       - master
+
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+
       - name: Send to webhook
-        run: curl -X POST https://accipitrine-elena-nonhallucinated.ngrok-free.dev/webhook -H "Content-Type: application/json" -d "{`\"branch`\": `\"master`\"}"
+        run: |
+          curl -X POST https://accipitrine-elena-nonhallucinated.ngrok-free.dev/webhook -H "Content-Type: application/json" -d "{\"branch\": \"master\", \"commit\": \"test\"}"
