@@ -1,0 +1,86 @@
+name: DeployGuard Risk Scoring
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2  # need parent commit for diff
+
+      - name: Send push event to DeployGuard
+        id: score
+        env:
+          WEBHOOK_URL: ${{ secrets.DEPLOYGUARD_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.DEPLOYGUARD_WEBHOOK_SECRET }}
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg ref "${{ github.ref }}" \
+            --arg before "${{ github.event.before }}" \
+            --arg after "${{ github.sha }}" \
+            --arg repo "${{ github.repository }}" \
+            --arg author "${{ github.actor }}" \
+            --arg message "${{ github.event.head_commit.message }}" \
+            '{
+              ref: $ref,
+              before: $before,
+              after: $after,
+              repository: { full_name: $repo },
+              head_commit: {
+                id: $after,
+                message: $message,
+                author: { name: $author }
+              }
+            }')
+
+          SIG="sha256=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')"
+
+          RESPONSE=$(curl -s -X POST "$WEBHOOK_URL/webhook" \
+            -H "Content-Type: application/json" \
+            -H "X-Hub-Signature-256: $SIG" \
+            -d "$PAYLOAD")
+
+          # EOF delimiter required for multiline JSON in GITHUB_OUTPUT
+          echo "response<<EOF" >> $GITHUB_OUTPUT
+          echo "$RESPONSE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          echo "$RESPONSE" | jq .
+
+      - name: Check risk level
+        env:
+          RESPONSE: ${{ steps.score.outputs.response }}
+        run: |
+          RISK_LEVEL=$(echo "$RESPONSE" | jq -r '.risk_level // "unknown"')
+          RISK_SCORE=$(echo "$RESPONSE" | jq -r '.risk_score // "unknown"')
+          REASONING=$(echo "$RESPONSE" | jq -r '.reasoning // "N/A"')
+          BLAST=$(echo "$RESPONSE" | jq -r '.blast_radius // "N/A"')
+
+          echo "──────────────────────────────────────"
+          echo "  DeployGuard Risk Assessment"
+          echo "──────────────────────────────────────"
+          echo "  Risk Level : $RISK_LEVEL"
+          echo "  Risk Score : $RISK_SCORE"
+          echo "  Blast Radius: $BLAST"
+          echo "  Reasoning  : $REASONING"
+          echo "──────────────────────────────────────"
+
+          if [ "$RISK_LEVEL" = "critical" ]; then
+            echo ""
+            echo "🚨 DEPLOY BLOCKED — risk level is CRITICAL."
+            echo "   Review the recommendations before merging:"
+            echo "$RESPONSE" | jq -r '.fix_recommendations[]' | while read rec; do
+              echo "   • $rec"
+            done
+            exit 1
+          elif [ "$RISK_LEVEL" = "high" ]; then
+            echo "⚠️  WARNING — risk level is HIGH. Proceeding, but review recommended."
+          else
+            echo "✅ Risk level is $RISK_LEVEL — deploy proceeding."
+          fi

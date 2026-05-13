@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>DeployGuard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:        #0a0b0d;
+      --surface:   #111318;
+      --border:    #1e2229;
+      --border-hi: #2e3340;
+      --text:      #c8cdd8;
+      --muted:     #4a5168;
+      --accent:    #4f9cf9;
+
+      --low:       #22c55e;
+      --low-bg:    #0d2818;
+      --low-border:#14532d;
+
+      --medium:    #eab308;
+      --medium-bg: #1c1a07;
+      --medium-border:#713f12;
+
+      --high:      #f97316;
+      --high-bg:   #1c0f07;
+      --high-border:#7c2d12;
+
+      --critical:  #ef4444;
+      --critical-bg:#1c0707;
+      --critical-border:#7f1d1d;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    /* ── scanline overlay ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.07) 2px,
+        rgba(0,0,0,0.07) 4px
+      );
+      pointer-events: none;
+      z-index: 100;
+    }
+
+    /* ── header ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 32px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .logo {
+      font-family: 'Syne', sans-serif;
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-icon {
+      width: 28px; height: 28px;
+      background: var(--accent);
+      border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px;
+    }
+
+    .header-meta {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .live-dot {
+      display: inline-block;
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--low);
+      box-shadow: 0 0 8px var(--low);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    /* ── layout ── */
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 32px;
+    }
+
+    /* ── stat cards ── */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 32px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+
+    .stat-card:hover { border-color: var(--border-hi); }
+
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+    }
+    .stat-card.total::before  { background: var(--accent); }
+    .stat-card.low::before    { background: var(--low); }
+    .stat-card.high::before   { background: var(--high); }
+    .stat-card.critical::before { background: var(--critical); }
+
+    .stat-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .stat-value {
+      font-family: 'Syne', sans-serif;
+      font-size: 36px;
+      font-weight: 800;
+      color: #fff;
+      line-height: 1;
+    }
+
+    .stat-card.critical .stat-value { color: var(--critical); }
+    .stat-card.high .stat-value { color: var(--high); }
+
+    /* ── section header ── */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .section-title {
+      font-family: 'Syne', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--muted);
+    }
+
+    .refresh-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      padding: 5px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── deploy table ── */
+    .table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead tr {
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      padding: 12px 16px;
+      text-align: left;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--muted);
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background 0.1s;
+      cursor: pointer;
+    }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: rgba(255,255,255,0.02); }
+
+    td {
+      padding: 14px 16px;
+      vertical-align: top;
+    }
+
+    .commit-sha {
+      font-size: 12px;
+      color: var(--accent);
+      font-weight: 500;
+    }
+
+    .repo-name {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .branch-tag {
+      display: inline-block;
+      background: rgba(79,156,249,0.1);
+      color: var(--accent);
+      border: 1px solid rgba(79,156,249,0.2);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+
+    .author-name { color: var(--text); }
+
+    /* ── risk badge ── */
+    .risk-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      white-space: nowrap;
+    }
+
+    .risk-badge.low      { background: var(--low-bg);      color: var(--low);      border: 1px solid var(--low-border); }
+    .risk-badge.medium   { background: var(--medium-bg);   color: var(--medium);   border: 1px solid var(--medium-border); }
+    .risk-badge.high     { background: var(--high-bg);     color: var(--high);     border: 1px solid var(--high-border); }
+    .risk-badge.critical { background: var(--critical-bg); color: var(--critical); border: 1px solid var(--critical-border); }
+
+    .risk-badge.critical { animation: flicker 3s ease-in-out infinite; }
+    @keyframes flicker {
+      0%, 100% { opacity: 1; }
+      92% { opacity: 1; }
+      93% { opacity: 0.6; }
+      94% { opacity: 1; }
+    }
+
+    /* ── score bar ── */
+    .score-wrap { min-width: 100px; }
+    .score-num {
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 5px;
+    }
+    .score-bar {
+      height: 3px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .score-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.6s ease;
+    }
+
+    .timestamp {
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    /* ── expand row ── */
+    .detail-row { display: none; }
+    .detail-row.open { display: table-row; }
+
+    .detail-cell {
+      padding: 0 16px 16px;
+      background: rgba(0,0,0,0.3);
+    }
+
+    .detail-inner {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      padding-top: 12px;
+    }
+
+    .detail-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px;
+    }
+
+    .detail-block-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .detail-block p {
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .recs-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .recs-list li {
+      display: flex;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .recs-list li::before {
+      content: '›';
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+
+    /* ── empty state ── */
+    .empty {
+      text-align: center;
+      padding: 80px 20px;
+      color: var(--muted);
+    }
+    .empty-icon { font-size: 40px; margin-bottom: 16px; opacity: 0.4; }
+    .empty h3 { font-family: 'Syne', sans-serif; font-size: 16px; margin-bottom: 8px; color: var(--text); }
+
+    /* ── loading ── */
+    .loading {
+      text-align: center;
+      padding: 60px;
+      color: var(--muted);
+    }
+    .loading::after {
+      content: '';
+      animation: dots 1.4s steps(3, end) infinite;
+    }
+    @keyframes dots {
+      0%   { content: '.'; }
+      33%  { content: '..'; }
+      66%  { content: '...'; }
+    }
+
+    /* ── entry animation ── */
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    tbody tr:not(.detail-row) {
+      animation: slideIn 0.3s ease both;
+    }
+
+    /* ── responsive ── */
+    @media (max-width: 900px) {
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .detail-inner { grid-template-columns: 1fr; }
+      td:nth-child(4), th:nth-child(4) { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">⚡</div>
+    DeployGuard
+  </div>
+  <div class="header-meta">
+    <span><span class="live-dot"></span>&nbsp; live</span>
+    <span id="last-updated">—</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- stat cards -->
+  <div class="stats">
+    <div class="stat-card total">
+      <div class="stat-label">Total Deploys</div>
+      <div class="stat-value" id="stat-total">—</div>
+    </div>
+    <div class="stat-card low">
+      <div class="stat-label">Low / Medium</div>
+      <div class="stat-value" id="stat-safe">—</div>
+    </div>
+    <div class="stat-card high">
+      <div class="stat-label">High Risk</div>
+      <div class="stat-value" id="stat-high">—</div>
+    </div>
+    <div class="stat-card critical">
+      <div class="stat-label">Critical (Blocked)</div>
+      <div class="stat-value" id="stat-critical">—</div>
+    </div>
+  </div>
+
+  <!-- deploy table -->
+  <div class="section-header">
+    <div class="section-title">Recent Deployments</div>
+    <button class="refresh-btn" onclick="load()">↻ Refresh</button>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Commit / Repo</th>
+          <th>Branch</th>
+          <th>Author</th>
+          <th>Blast Radius</th>
+          <th>Risk</th>
+          <th>Score</th>
+          <th>Time</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="7" class="loading">Fetching deployments</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</main>
+
+<script>
+  const RISK_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+
+  function scoreColor(level) {
+    return { low: '#22c55e', medium: '#eab308', high: '#f97316', critical: '#ef4444' }[level] || '#4a5168';
+  }
+
+  function relativeTime(iso) {
+    const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+    if (diff < 60)   return `${diff}s ago`;
+    if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+    return `${Math.floor(diff/86400)}d ago`;
+  }
+
+  function buildRow(d, index) {
+    const level = (d.risk_level || 'unknown').toLowerCase();
+    const score = d.risk_score != null ? d.risk_score.toFixed(3) : '—';
+    const pct   = d.risk_score != null ? (d.risk_score * 100).toFixed(0) : 0;
+    const color = scoreColor(level);
+    const delay = index * 40;
+
+    const mainId   = `row-${d.id}`;
+    const detailId = `detail-${d.id}`;
+
+    const mainRow = `
+      <tr id="${mainId}" style="animation-delay:${delay}ms" onclick="toggleDetail('${d.id}')">
+        <td>
+          <div class="commit-sha">${d.commit_sha || '?'}</div>
+          <div class="repo-name">${d.repo || ''}</div>
+        </td>
+        <td><span class="branch-tag">${d.branch || 'unknown'}</span></td>
+        <td><span class="author-name">${d.author || '—'}</span></td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px">
+          ${d.blast_radius || '—'}
+        </td>
+        <td><span class="risk-badge ${level}">${level}</span></td>
+        <td>
+          <div class="score-wrap">
+            <div class="score-num" style="color:${color}">${score}</div>
+            <div class="score-bar">
+              <div class="score-fill" style="width:${pct}%;background:${color}"></div>
+            </div>
+          </div>
+        </td>
+        <td class="timestamp">${d.timestamp ? relativeTime(d.timestamp) : '—'}</td>
+      </tr>`;
+
+    const detailRow = `
+      <tr id="${detailId}" class="detail-row">
+        <td colspan="7" class="detail-cell">
+          <div class="detail-inner">
+            <div class="detail-block">
+              <div class="detail-block-title">AI Reasoning</div>
+              <p>${d.reasoning || 'No reasoning available.'}</p>
+            </div>
+            <div class="detail-block">
+              <div class="detail-block-title">Fix Recommendations</div>
+              <ul class="recs-list">
+                ${(d.fix_recommendations || []).map(r => `<li>${r}</li>`).join('') || '<li>None provided.</li>'}
+              </ul>
+            </div>
+          </div>
+        </td>
+      </tr>`;
+
+    return mainRow + detailRow;
+  }
+
+  function toggleDetail(id) {
+    const el = document.getElementById(`detail-${id}`);
+    if (!el) return;
+    el.classList.toggle('open');
+  }
+
+  async function load() {
+    const tbody = document.getElementById('tbody');
+    tbody.innerHTML = '<tr><td colspan="7" class="loading">Fetching deployments</td></tr>';
+
+    try {
+      const res  = await fetch('/deploys?limit=50');
+      const data = await res.json();
+
+      document.getElementById('last-updated').textContent =
+        'updated ' + new Date().toLocaleTimeString();
+
+      if (!data.length) {
+        tbody.innerHTML = `
+          <tr><td colspan="7">
+            <div class="empty">
+              <div class="empty-icon">🛰</div>
+              <h3>No deployments yet</h3>
+              <p>Push to master and DeployGuard will score it here.</p>
+            </div>
+          </td></tr>`;
+        updateStats([]);
+        return;
+      }
+
+      tbody.innerHTML = data.map(buildRow).join('');
+      updateStats(data);
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="7" style="padding:40px;text-align:center;color:var(--critical)">
+        Failed to load: ${e.message}
+      </td></tr>`;
+    }
+  }
+
+  function updateStats(data) {
+    document.getElementById('stat-total').textContent    = data.length;
+    document.getElementById('stat-safe').textContent     = data.filter(d => ['low','medium'].includes(d.risk_level)).length;
+    document.getElementById('stat-high').textContent     = data.filter(d => d.risk_level === 'high').length;
+    document.getElementById('stat-critical').textContent = data.filter(d => d.risk_level === 'critical').length;
+  }
+
+  // auto-refresh every 30s
+  load();
+  setInterval(load, 30000);
+</script>
+</body>
+</html>
