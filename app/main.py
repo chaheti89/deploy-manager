@@ -2,9 +2,11 @@ import hashlib
 import hmac
 import json
 import httpx
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
 
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import HTMLResponse
@@ -154,11 +156,8 @@ async def webhook(
     if not diff:
         diff = "[Empty diff — no changes detected]"
 
-    # 4. Ingest diff into pgvector (non-fatal)
-    try:
-        await ingest_diff(commit_sha=commit_sha, repo=repo, diff=diff)
-    except Exception as e:
-        print(f"[embeddings] ingest failed (non-fatal): {e}")
+    # 4. Ingest diff into pgvector (background — non-blocking)
+    asyncio.create_task(ingest_diff(commit_sha=commit_sha, repo=repo, diff=diff))
 
     # 5. Score the deploy with Claude
     try:
@@ -179,8 +178,8 @@ async def webhook(
         }
 
     # 6. Persist to DB and send notifications concurrently (all non-fatal)
-    import asyncio as _asyncio
-    await _asyncio.gather(
+
+    await asyncio.gather(
         _save_deploy_event(repo, commit_sha, author, branch, diff, risk),
         notify_slack(repo, commit_sha, author, branch, risk),
         notify_email(repo, commit_sha, author, branch, risk),
