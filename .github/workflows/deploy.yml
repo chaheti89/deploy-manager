@@ -12,13 +12,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 2  # need parent commit for diff
+          fetch-depth: 2  
 
       - name: Send push event to DeployGuard
         id: score
         env:
           WEBHOOK_URL: ${{ secrets.DEPLOYGUARD_WEBHOOK_URL }}
           WEBHOOK_SECRET: ${{ secrets.DEPLOYGUARD_WEBHOOK_SECRET }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }} 
         run: |
           PAYLOAD=$(jq -n \
             --arg ref "${{ github.ref }}" \
@@ -26,7 +27,7 @@ jobs:
             --arg after "${{ github.sha }}" \
             --arg repo "${{ github.repository }}" \
             --arg author "${{ github.actor }}" \
-            --arg message "${{ github.event.head_commit.message }}" \
+            --arg message "$COMMIT_MESSAGE" \
             '{
               ref: $ref,
               before: $before,
