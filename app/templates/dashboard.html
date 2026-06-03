@@ -201,6 +201,26 @@
     }
     .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+    .load-more-wrap {
+      text-align: center;
+      padding: 20px;
+      border-top: 1px solid var(--border);
+    }
+
+    .load-more-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      padding: 8px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .load-more-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .load-more-btn:disabled { opacity: 0.3; cursor: default; }
+
     /* ── deploy table ── */
     .table-wrap {
       background: var(--surface);
@@ -332,6 +352,30 @@
       grid-template-columns: 1fr 1fr;
       gap: 16px;
       padding-top: 12px;
+    }
+
+    .detail-block.full-width {
+      grid-column: 1 / -1;
+    }
+
+    .similar-list {
+      max-height: 160px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .similar-chunk {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-size: 11px;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-all;
+      line-height: 1.5;
     }
 
     .detail-block {
@@ -478,9 +522,16 @@
     </table>
   </div>
 
+  <div class="load-more-wrap" id="load-more-wrap" style="display:none">
+    <button class="load-more-btn" id="load-more-btn" onclick="loadMore()">↓ Load more</button>
+  </div>
+
 </main>
 
 <script>
+  const PAGE_SIZE = 20;
+  let currentOffset = 0;
+  let allRows = [];          // accumulates every loaded row for stat counting
   const RISK_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 
   function scoreColor(level) {
@@ -528,6 +579,11 @@
         <td class="timestamp">${d.timestamp ? relativeTime(d.timestamp) : '—'}</td>
       </tr>`;
 
+    const similarChunks = (d.similar_past_deploys || []);
+    const similarHtml = similarChunks.length
+      ? similarChunks.map(c => `<div class="similar-chunk">${c.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`).join('')
+      : '<span style="color:var(--muted);font-size:12px">No similar past deploys found.</span>';
+
     const detailRow = `
       <tr id="${detailId}" class="detail-row">
         <td colspan="7" class="detail-cell">
@@ -541,6 +597,10 @@
               <ul class="recs-list">
                 ${(d.fix_recommendations || []).map(r => `<li>${r}</li>`).join('') || '<li>None provided.</li>'}
               </ul>
+            </div>
+            <div class="detail-block full-width">
+              <div class="detail-block-title">Similar Past Deploys (${similarChunks.length})</div>
+              <div class="similar-list">${similarHtml}</div>
             </div>
           </div>
         </td>
@@ -556,17 +616,33 @@
   }
 
   async function load() {
+    // Full reset — used on first load and manual refresh
+    currentOffset = 0;
+    allRows = [];
     const tbody = document.getElementById('tbody');
     tbody.innerHTML = '<tr><td colspan="7" class="loading">Fetching deployments</td></tr>';
+    document.getElementById('load-more-wrap').style.display = 'none';
+    await _fetchPage(tbody, true);
+  }
 
+  async function loadMore() {
+    const btn = document.getElementById('load-more-btn');
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+    await _fetchPage(document.getElementById('tbody'), false);
+    btn.disabled = false;
+    btn.textContent = '↓ Load more';
+  }
+
+  async function _fetchPage(tbody, replace) {
     try {
-      const res  = await fetch('/deploys?limit=50');
+      const res  = await fetch(`/deploys?limit=${PAGE_SIZE}&offset=${currentOffset}`);
       const data = await res.json();
 
       document.getElementById('last-updated').textContent =
         'updated ' + new Date().toLocaleTimeString();
 
-      if (!data.length) {
+      if (replace && !data.length) {
         tbody.innerHTML = `
           <tr><td colspan="7">
             <div class="empty">
@@ -579,8 +655,22 @@
         return;
       }
 
-      tbody.innerHTML = data.map(buildRow).join('');
-      updateStats(data);
+      const startIndex = replace ? 0 : allRows.length;
+      const html = data.map((d, i) => buildRow(d, startIndex + i)).join('');
+      if (replace) {
+        tbody.innerHTML = html;
+      } else {
+        tbody.insertAdjacentHTML('beforeend', html);
+      }
+
+      allRows = replace ? data : allRows.concat(data);
+      currentOffset += data.length;
+      updateStats(allRows);
+
+      // Show Load more only if a full page came back (there may be more)
+      document.getElementById('load-more-wrap').style.display =
+        data.length === PAGE_SIZE ? 'block' : 'none';
+
     } catch (e) {
       tbody.innerHTML = `<tr><td colspan="7" style="padding:40px;text-align:center;color:var(--critical)">
         Failed to load: ${e.message}
@@ -595,7 +685,7 @@
     document.getElementById('stat-critical').textContent = data.filter(d => d.risk_level === 'critical').length;
   }
 
-  // auto-refresh every 30s
+  // auto-refresh every 30 s — resets to first page
   load();
   setInterval(load, 30000);
 </script>

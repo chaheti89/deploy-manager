@@ -90,7 +90,7 @@ async def ingest_diff(commit_sha: str, repo: str, diff: str) -> int:
 
 async def retrieve_similar(diff: str, repo: str, top_k: int = 5) -> list[str]:
     """Find the most similar past diff chunks using pgvector cosine similarity."""
-    query_embedding = await embed_text(diff[:500])
+    query_embedding = await embed_text(diff[:2000])  # first 500 chars missed risky code deep in large diffs
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             text("""

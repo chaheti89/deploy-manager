@@ -3,10 +3,9 @@ import hmac
 import json
 import httpx
 import asyncio
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
-
 
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import HTMLResponse
@@ -16,28 +15,23 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import select, desc
 
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC for DB compat
-
 from app.config import settings
+from app.utils import _utcnow
 from app.database import init_db, AsyncSessionLocal, DeployEventDB
 from app.embeddings import ingest_diff
 from app.scorer import score_deploy
 from app.notifications import notify_slack, notify_email
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    yield
+
 limiter = Limiter(key_func=get_remote_address)
-app = FastAPI(title="DeployGuard")
+app = FastAPI(title="DeployGuard", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
-
-
-# ── Startup ────────────────────────────────────────────────────────
-
-@app.on_event("startup")
-async def startup():
-    await init_db()
 
 
 # ── Health ─────────────────────────────────────────────────────────
@@ -97,6 +91,7 @@ async def _save_deploy_event(
     author: str,
     branch: str,
     diff: str,
+    similar_past_deploys: list[str],
     risk_score,
 ) -> None:
     """Persist the scored deploy event to the database."""
@@ -112,10 +107,19 @@ async def _save_deploy_event(
             blast_radius=risk_score.blast_radius,
             reasoning=risk_score.reasoning,
             fix_recommendations=json.dumps(risk_score.fix_recommendations),
+            similar_past_deploys=json.dumps(similar_past_deploys),
             timestamp=_utcnow(),
         )
         session.add(event)
         await session.commit()
+
+
+async def _ingest_diff_safe(commit_sha: str, repo: str, diff: str) -> None:
+    try:
+        n = await ingest_diff(commit_sha=commit_sha, repo=repo, diff=diff)
+        print(f"[embeddings] stored {n} chunks for {repo}@{commit_sha[:7]}")
+    except Exception as e:
+        print(f"[embeddings] ingest failed for {repo}@{commit_sha[:7]} (non-fatal): {e}")
 
 
 # ── Main webhook ───────────────────────────────────────────────────
@@ -133,9 +137,6 @@ async def webhook(
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     payload = json.loads(body)
-    print("\n--- WEBHOOK RECEIVED ---")
-    print(json.dumps(payload, indent=2)[:500])
-    print("------------------------\n")
 
     # 2. Extract fields from GitHub push event
     repo = payload.get("repository", {}).get("full_name", "unknown/unknown")
@@ -144,6 +145,8 @@ async def webhook(
     commit_sha = head_commit.get("id", payload.get("commit", "unknown"))
     author = head_commit.get("author", {}).get("name", "unknown")
     before_sha = payload.get("before", "")
+
+    print(f"[webhook] push received: {repo}@{commit_sha[:7]} by {author} on {branch}")
 
     # 3. Fetch the actual diff from GitHub
     diff = ""
@@ -157,17 +160,28 @@ async def webhook(
         diff = "[Empty diff — no changes detected]"
 
     # 4. Ingest diff into pgvector (background — non-blocking)
-    asyncio.create_task(ingest_diff(commit_sha=commit_sha, repo=repo, diff=diff))
+    asyncio.create_task(_ingest_diff_safe(commit_sha=commit_sha, repo=repo, diff=diff))
 
-    # 5. Score the deploy with Claude
+    # 5. Score the deploy with Claude (60 s hard ceiling so GH Actions never hangs)
     try:
-        risk = await score_deploy(
-            repo=repo,
-            commit_sha=commit_sha,
-            author=author,
-            branch=branch,
-            diff=diff,
+        risk = await asyncio.wait_for(
+            score_deploy(
+                repo=repo,
+                commit_sha=commit_sha,
+                author=author,
+                branch=branch,
+                diff=diff,
+            ),
+            timeout=60.0,
         )
+    except asyncio.TimeoutError:
+        print(f"[scorer] scoring timed out for {repo}@{commit_sha[:7]}")
+        return {
+            "status": "timeout",
+            "scored": False,
+            "error": "Scoring timed out after 60 s — deploy not blocked",
+            "commit": commit_sha,
+        }
     except Exception as e:
         print(f"[scorer] scoring failed: {e}")
         return {
@@ -180,7 +194,7 @@ async def webhook(
     # 6. Persist to DB and send notifications concurrently (all non-fatal)
 
     await asyncio.gather(
-        _save_deploy_event(repo, commit_sha, author, branch, diff, risk),
+        _save_deploy_event(repo, commit_sha, author, branch, diff, risk.similar_past_deploys, risk),
         notify_slack(repo, commit_sha, author, branch, risk),
         notify_email(repo, commit_sha, author, branch, risk),
         return_exceptions=True,
@@ -205,13 +219,13 @@ async def webhook(
 # ── History endpoint ───────────────────────────────────────────────
 
 @app.get("/deploys")
-async def list_deploys(limit: int = 20, repo: Optional[str] = None):
-    """Return recent scored deploy events."""
+async def list_deploys(limit: int = 20, offset: int = 0, repo: Optional[str] = None):
+    """Return recent scored deploy events. Supports ?limit=N&offset=N&repo=owner/name."""
     async with AsyncSessionLocal() as session:
         q = select(DeployEventDB)
         if repo:
             q = q.where(DeployEventDB.repo == repo)
-        q = q.order_by(desc(DeployEventDB.timestamp)).limit(limit)
+        q = q.order_by(desc(DeployEventDB.timestamp)).limit(limit).offset(offset)
         result = await session.execute(q)
         rows = result.scalars().all()
 
@@ -227,6 +241,7 @@ async def list_deploys(limit: int = 20, repo: Optional[str] = None):
             "blast_radius": r.blast_radius,
             "reasoning": r.reasoning,
             "fix_recommendations": json.loads(r.fix_recommendations) if r.fix_recommendations else [],
+            "similar_past_deploys": json.loads(r.similar_past_deploys) if r.similar_past_deploys else [],
             "timestamp": r.timestamp.isoformat() if r.timestamp else None,
         }
         for r in rows
@@ -257,6 +272,7 @@ async def get_deploy(deploy_id: int):
         "blast_radius": r.blast_radius,
         "reasoning": r.reasoning,
         "fix_recommendations": json.loads(r.fix_recommendations) if r.fix_recommendations else [],
+        "similar_past_deploys": json.loads(r.similar_past_deploys) if r.similar_past_deploys else [],
         "timestamp": r.timestamp.isoformat() if r.timestamp else None,
     }
 
@@ -272,21 +288,21 @@ async def dashboard(request: Request):
 # ── Dev / test endpoints ───────────────────────────────────────────
 
 @app.post("/test-embed")
-async def test_embed():
+async def test_embed(repo: str = "test/repo"):
     n = await ingest_diff(
-        commit_sha="abc123",
-        repo="chaheti89/deploy-manager",
+        commit_sha="test_embed",
+        repo=repo,
         diff="+ added payment gateway integration\n- removed old billing code\n+ new stripe webhook handler",
     )
-    return {"chunks_stored": n}
+    return {"chunks_stored": n, "repo": repo}
 
 
 @app.post("/test-score")
-async def test_score():
+async def test_score(repo: str = "test/repo", author: str = "dev"):
     result = await score_deploy(
-        repo="chaheti89/deploy-manager",
-        commit_sha="def456",
-        author="chaheti89",
+        repo=repo,
+        commit_sha="test_score",
+        author=author,
         branch="master",
         diff="""
 - def process_payment(card_number, amount):

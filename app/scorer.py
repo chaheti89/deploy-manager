@@ -1,12 +1,9 @@
 import anthropic
 import asyncio
 import json
-from datetime import datetime, timezone
-
-def _utcnow():
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 from app.config import settings
+from app.utils import _utcnow
 from app.models import RiskScore, RiskLevel
 from app.embeddings import retrieve_similar
 
@@ -33,7 +30,7 @@ async def _call_claude_with_retry(prompt: str, max_retries: int = 3) -> str:
     for attempt in range(max_retries):
         try:
             message = await client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-4-6",
                 max_tokens=1000,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -53,7 +50,6 @@ async def _call_claude_with_retry(prompt: str, max_retries: int = 3) -> str:
                 await asyncio.sleep(wait)
             else:
                 raise
-    raise RuntimeError("Claude API call failed after all retries")
 
 
 async def score_deploy(repo: str, commit_sha: str, author: str, branch: str, diff: str) -> RiskScore:
